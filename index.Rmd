@@ -1,0 +1,186 @@
+---
+title: "SQL Murder Mystery"
+author: "Can Serdar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(kableExtra)
+```
+
+
+You vaguely remember that the crime was a murder that occurred sometime on Jan.15, 2018, and that it took place in SQL City.
+
+This introduction gives us some clues:
+
+-	Murder  
+-	On Jan.15, 2018  
+-	SQL City  
+
+It is also given that the database is organized in the following schema:
+
+![](./img/schema.png)
+
+
+Using the query:  
+```{sql, eval = FALSE}
+SELECT * FROM crime_scene_report  
+  WHERE city = "SQL City"
+    AND date = 20180115 
+    AND type = "murder"
+```
+
+
+| date    | type  | description | city |
+|:-------:|:-----:|:------------|:----:|
+| 20180115| murder| Security footage shows that there were 2 witnesses. The first witness lives at the last house on "Northwestern Dr". The second witness, Annabel, lives somewhere on "Franklin Ave".| SQL City|
+
+
+From this query, we gather three clues:
+
+- There are **two witnesses**  
+- One witness lives in the **last house on Northwestern Dr.**  
+- The other witness is **named Annabel** and lives somewhere on **Franklin Ave.**  
+
+
+We will query the persons table to identify the witnesses by address_street_name, id, and name. We will also query the max(address_number) on "Northwestern Dr", assuming the last house will have the largest address number.  
+
+
+
+```{sql, eval = FALSE}
+SELECT id, name, address_street_name, max(address_number) FROM person
+  WHERE address_street_name = "Northwestern Dr" 
+    OR (address_street_name = "Franklin Ave" AND name LIKE "%Annabel%")
+  GROUP BY address_street_name
+
+```
+
+
+| id  | ssn     | name         |address_street_name | max(address_number)|
+|:---:|:-------:|:------------:|:------------------:|:------------------:|
+|16371|318771143|Annabel Miller|Franklin Ave        |103                 |
+|14887|111564949|Morty Schapiro|Northwestern Dr     |4919                |
+
+
+We can use the IDs of the witnesses to reach their interview transcripts:
+
+
+```{sql, eval = FALSE}
+SELECT * FROM interview
+  WHERE person_id = 16371 OR person_id = 14887
+```
+
+
+| person_id | transcript|
+|:---------:|:----------|
+| 14887     | I heard a gunshot and then saw a man run out. He had a "Get Fit Now Gym" bag. The membership number on the bag started with "48Z". Only gold members have those bags. The man got into a car with a plate that included "H42W".|
+|16371 | I saw the murder happen, and I recognized the killer from my gym when I was working out last week on January the 9th.|
+
+
+We get numerous clues from these interviews:
+
+-	The killer had a **Get Fit Now Gym** bag.  
+-	The killer's **membership number starts with "48Z"**.  
+-	The killer is a **gold member** of Get Fit Now Gym.   
+-	The killer rode a car with a plate including **"H42W"**.  
+-	The killer was in the gym on **January 9th**.  
+
+
+We can now query get_fit_now_check_in table with these clues to identify the suspect using get_fit_now_check_in and get_fit_now_member tables.
+
+```{sql, eval = FALSE}
+SELECT membership_id, name, check_in_date, membership_status FROM get_fit_now_check_in
+  JOIN get_fit_now_member ON get_fit_now_member.id = get_fit_now_check_in.membership_id
+  WHERE check_in_date = 20180109 AND membership_id LIKE "48Z%"
+```
+
+We hit two suspects with that query:
+
+
+
+| membership_id | name        | check_in_date | membership_status|
+|:-------------:|:-----------:|:-------------:|:----------------:|
+| 48Z7A         |Joe Germuska |20180109       |gold              |
+| 48Z55         |Jeremy Bowers|20180109       |gold              |
+
+
+We can try running the plate among Get Fit Now members.
+
+```{sql, eval = FALSE}
+SELECT person.name FROM person
+  JOIN drivers_license ON person.license_id = drivers_license.id
+  JOIN get_fit_now_member ON person.id = get_fit_now_member.person_id
+  WHERE plate_number LIKE "%H42W%"
+```
+
+We now know the murderer:
+
+
+**Jeremy Bowers**
+
+Let's verify if we are right:
+
+```{sql, eval = FALSE}
+INSERT INTO solution VALUES (1, 'Jeremy Bowers');        
+  SELECT value FROM solution
+```
+
+
+> Congrats, you found the murderer! But wait, there's more... If you think you're up for a challenge, try querying the interview transcript of the murderer to find the real villain behind this crime. If you feel especially confident in your SQL skills, try to complete this final step with no more than 2 queries. Use this same INSERT statement with your new suspect to check your answer.
+
+
+
+Oh... It seems Jeremy Bowers was only a pawn in this crime, there was a real villain behind this scheme. We will interview the murderer first:
+
+```{sql, eval = FALSE}
+SELECT * FROM interview
+  WHERE person_id = 67318
+
+```
+
+
+| person_id| transcript|
+|:--------:|:----------|
+| 67318    | I was hired by a woman with a lot of money. I don't know her name but I know she's around 5'5" (65") or 5'7" (67"). She has red hair and she drives a Tesla Model S. I know that she attended the SQL Symphony Concert 3 times in December 2017. |
+
+
+The desperate murderer gave us many clues about the villain:
+
+- She is a **woman**.
+- She has **a lot of money**.
+- She is around **65'' - 67'' in height**.
+- She has **red hair**.
+- She drives a **Tesla Model S**.
+- She attended **SQL Symphony Concert** **three times in December 2017**.
+
+
+We can use all these clues to construct a query and find our villain:
+
+```{sql, eval = FALSE}
+SELECT name FROM drivers_license
+  JOIN person ON drivers_license.id = person.license_id
+  JOIN income ON income.ssn = person.ssn
+  JOIN facebook_event_checkin ON facebook_event_checkin.person_id = person.id
+  WHERE drivers_license.gender = "female" 
+      AND drivers_license.height BETWEEN 65 AND 67 
+      AND drivers_license.hair_color = "red" 
+    	AND drivers_license.car_make = "Tesla" 
+    	AND facebook_event_checkin.event_name LIKE "%Symphony%"
+      AND facebook_event_checkin.date LIKE "201712%" 
+	  GROUP BY person_id
+    HAVING count(facebook_event_checkin.date) = 3
+```
+
+And this query returns us the name:
+
+**Miranda Priestly**
+
+Again, let us check our answer:
+```{sql, eval = FALSE}
+INSERT INTO solution VALUES (1, 'Miranda Priestly');
+  SELECT value FROM solution;
+```
+
+> Congrats, you found the brains behind the murder! Everyone in SQL City hails you as the greatest SQL detective of all time. Time to break out the champagne!
